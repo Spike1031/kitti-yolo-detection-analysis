@@ -154,7 +154,7 @@ The class-level summary shows that cars are the dominant detected class in the s
 
 The confidence-threshold comparison shows how the total number of traffic-related detections changes under different confidence thresholds.
 
-### Failure Case Example
+### Failure Case Candidate Example
 
 ![KITTI Failure Case](docs/kitti_failure_case.png)
 
@@ -208,4 +208,5 @@ outputs/
 __pycache__/
 *.pyc
 .venv/
+.idea/
 ```
