@@ -1,17 +1,18 @@
 # KITTI YOLOv8 Object Detection Analysis
 
-This project applies YOLOv8 to KITTI traffic-scene images for object detection and result analysis. The goal is to test a lightweight object detection model on autonomous driving scenes, export detection results, summarize class-level statistics, and analyze typical failure cases such as small objects, occlusion, distant vehicles, and false detections.
+This project applies YOLOv8 to KITTI traffic-scene images for object detection and result analysis. The goal is to test a lightweight object detection model on autonomous driving scenes, export detection results, summarize class-level statistics, compare different confidence thresholds, and analyze potential failure cases such as small objects, low-confidence detections, near-border objects, occlusion, distant vehicles, and possible false detections.
 
 ## Features
 
 * Run YOLOv8 object detection on KITTI traffic-scene images
 * Detect traffic-related objects such as cars, trucks, buses, bicycles, pedestrians, and traffic lights
 * Save annotated detection images with bounding boxes and confidence scores
-* Export detection results to CSV
+* Export object-level detection results to CSV
 * Generate per-image object count summaries
 * Generate class-level detection statistics
 * Visualize class distribution using a summary chart
-* Identify possible failure cases using confidence, object size, and border-location indicators
+* Compare detection counts under different confidence thresholds
+* Identify possible failure-case candidates using confidence score, object size, and border-location indicators
 
 ## Tech Stack
 
@@ -34,7 +35,8 @@ kitti-yolo-detection-analysis/
 ├── docs/
 │   ├── kitti_detection_demo.png
 │   ├── kitti_failure_case.png
-│   └── kitti_class_summary.png
+│   ├── kitti_class_summary.png
+│   └── threshold_comparison.png
 ├── kitti_yolo_analysis.py
 ├── requirements.txt
 ├── .gitignore
@@ -59,7 +61,7 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Put KITTI images into:
+Put selected KITTI images into:
 
 ```text
 data/kitti_images/
@@ -81,9 +83,12 @@ outputs/
 ├── csv/
 │   ├── kitti_detection_results.csv
 │   ├── kitti_image_summary.csv
-│   └── kitti_class_summary.csv
+│   ├── kitti_class_summary.csv
+│   ├── failure_case_candidates.csv
+│   └── threshold_comparison.csv
 └── charts/
-    └── kitti_class_summary.png
+    ├── kitti_class_summary.png
+    └── threshold_comparison.png
 ```
 
 ## CSV Outputs
@@ -92,23 +97,42 @@ outputs/
 
 This file stores object-level detection results.
 
-| Column             | Meaning                                                                 |
-| ------------------ | ----------------------------------------------------------------------- |
-| image_name         | Image file name                                                         |
-| class_name         | Detected object class                                                   |
-| confidence         | YOLOv8 detection confidence                                             |
-| x1, y1, x2, y2     | Bounding box coordinates                                                |
-| center_x, center_y | Bounding box center point                                               |
-| bbox_area_ratio    | Bounding box area divided by image area                                 |
-| analysis_notes     | Simple notes such as low confidence, small object, or near image border |
+| Column             | Meaning                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------ |
+| image_name         | Image file name                                                                            |
+| class_name         | Detected object class                                                                      |
+| confidence         | YOLOv8 detection confidence                                                                |
+| x1, y1, x2, y2     | Bounding box coordinates                                                                   |
+| center_x, center_y | Bounding box center point                                                                  |
+| bbox_area_ratio    | Bounding box area divided by image area                                                    |
+| analysis_notes     | Simple notes such as low confidence, small object, very small object, or near image border |
 
 ### `kitti_image_summary.csv`
 
 This file stores per-image object counts.
 
+| Column     | Meaning                                               |
+| ---------- | ----------------------------------------------------- |
+| image_name | Image file name                                       |
+| class_name | Detected object class                                 |
+| count      | Number of detected objects of this class in the image |
+
 ### `kitti_class_summary.csv`
 
 This file stores total detection counts for each object class.
+
+| Column      | Meaning                                   |
+| ----------- | ----------------------------------------- |
+| class_name  | Detected object class                     |
+| total_count | Total number of detections for this class |
+
+### `failure_case_candidates.csv`
+
+This file stores heuristic failure-case candidates. These candidates are selected based on low confidence, small bounding-box area, very small bounding-box area, and near-image-border locations. They are not official KITTI benchmark errors, but they help identify detections that may require manual inspection.
+
+### `threshold_comparison.csv`
+
+This file stores the number of traffic-related detections under different confidence thresholds. It is used to analyze the trade-off between detection coverage and possible false-positive risk.
 
 ## Demo Result
 
@@ -142,7 +166,7 @@ In the selected KITTI image subset, cars are the dominant detected class, which 
 
 This indicates a trade-off between detection coverage and false-positive risk. A lower confidence threshold can detect more small or distant objects, but may also introduce more uncertain detections. A higher threshold produces more conservative results, but may miss small vehicles, distant traffic lights, or partially visible objects.
 
-The failure-case candidate table uses heuristic indicators such as low confidence, small bounding-box area, and near-border object location. These candidates are not official KITTI benchmark errors, but they help identify examples that may require manual inspection.
+The failure-case candidate table uses heuristic indicators such as low confidence, small bounding-box area, very small bounding-box area, and near-border object location. These candidates are not official KITTI benchmark errors, but they help identify examples that may require manual inspection.
 
 ## Limitations
 
@@ -155,12 +179,31 @@ Typical limitations include:
 * Background structures, poles, shadows, or reflections may cause false detections
 * Objects near the image border may be only partially visible
 * The current script performs inference only and does not calculate official KITTI benchmark metrics such as AP or mAP
+* Failure-case candidates are based on heuristic indicators and still require manual inspection
 
 ## Future Work
 
-* Add comparison with larger YOLOv8 models such as YOLOv8s or YOLOv8m
-* Add confidence-threshold experiments
-* Add manual failure case analysis
+* Compare YOLOv8n with larger YOLOv8 models such as YOLOv8s or YOLOv8m
 * Compare detection results with KITTI ground-truth labels
-* Calculate detection metrics such as precision, recall, and mAP
+* Calculate detection metrics such as precision, recall, AP, and mAP
+* Add more detailed manual failure-case categorization
+* Analyze detection performance under different object sizes and distances
 * Extend the analysis to tracking or multi-frame video sequences
+
+## Notes
+
+Raw KITTI images, generated output files, and YOLO model weights are not tracked in this repository. The repository only keeps source code, documentation, and selected demonstration images.
+
+Recommended ignored files include:
+
+```text
+data/
+outputs/
+*.pt
+*.mp4
+*.avi
+*.mov
+__pycache__/
+*.pyc
+.venv/
+```
