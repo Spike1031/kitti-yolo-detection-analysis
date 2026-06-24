@@ -1,5 +1,5 @@
 from pathlib import Path
-from collections import Counter, defaultdict
+from collections import Counter
 import csv
 
 import cv2
@@ -23,7 +23,11 @@ CHART_DIR = OUTPUT_DIR / "charts"
 DETECTION_CSV_PATH = CSV_DIR / "kitti_detection_results.csv"
 IMAGE_SUMMARY_CSV_PATH = CSV_DIR / "kitti_image_summary.csv"
 CLASS_SUMMARY_CSV_PATH = CSV_DIR / "kitti_class_summary.csv"
+FAILURE_CASE_CSV_PATH = CSV_DIR / "failure_case_candidates.csv"
+THRESHOLD_COMPARISON_CSV_PATH = CSV_DIR / "threshold_comparison.csv"
+
 CLASS_CHART_PATH = CHART_DIR / "kitti_class_summary.png"
+THRESHOLD_CHART_PATH = CHART_DIR / "threshold_comparison.png"
 
 
 # =========================
@@ -31,7 +35,13 @@ CLASS_CHART_PATH = CHART_DIR / "kitti_class_summary.png"
 # =========================
 
 MODEL_NAME = "yolov8n.pt"
-CONF_THRES = 0.3
+
+# Main threshold used for annotated images and detailed CSV output
+CONF_THRES = 0.30
+
+# Extra thresholds used for analysis experiment
+CONFIDENCE_THRESHOLDS = [0.25, 0.50, 0.70]
+
 IMG_SIZE = 640
 
 
@@ -51,6 +61,18 @@ TRAFFIC_CLASSES = {
     "train",
 }
 
+TRAFFIC_CLASS_ORDER = [
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "bus",
+    "truck",
+    "traffic light",
+    "stop sign",
+    "train",
+]
+
 
 # =========================
 # Visualization Configuration
@@ -61,6 +83,16 @@ LABEL_FONT_SCALE = 0.75
 LABEL_THICKNESS = 2
 PANEL_FONT_SCALE = 0.65
 PANEL_THICKNESS = 2
+
+
+# =========================
+# Failure-case Heuristic Thresholds
+# =========================
+
+LOW_CONFIDENCE_THRES = 0.50
+SMALL_OBJECT_AREA_RATIO_THRES = 0.01
+VERY_SMALL_OBJECT_AREA_RATIO_THRES = 0.003
+BORDER_MARGIN_PX = 5
 
 
 def get_color(class_name: str):
@@ -100,6 +132,8 @@ def draw_label(frame, text, x, y, color):
     )
 
     x = max(0, min(x, frame_w - text_w - 12))
+
+    # If the object is too close to the top, draw the label below the top boundary
     label_y = max(y, text_h + baseline + 8)
 
     cv2.rectangle(
@@ -172,12 +206,15 @@ def draw_summary_panel(frame, image_name, image_counts):
 
 def collect_images(image_dir: Path):
     """
-    Collect image files from the input folder.
+    Collect image files from the input folder and remove duplicates.
+    This avoids duplicate matches on Windows where glob can be case-insensitive.
     """
-    image_paths = []
+    valid_suffixes = {".jpg", ".jpeg", ".png"}
 
-    for suffix in ["*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG"]:
-        image_paths.extend(image_dir.glob(suffix))
+    image_paths = []
+    for path in image_dir.iterdir():
+        if path.is_file() and path.suffix.lower() in valid_suffixes:
+            image_paths.append(path)
 
     return sorted(image_paths)
 
@@ -192,38 +229,40 @@ def analyze_detection_quality(
     image_height,
 ):
     """
-    Generate simple analysis notes for possible failure cases.
+    Generate simple heuristic notes for possible failure-case candidates.
 
-    These notes are not ground-truth evaluation. They only help identify
-    cases that may be worth manual inspection.
+    These notes are not official KITTI benchmark errors.
+    They are only used to identify detections that may be worth manual inspection.
     """
     notes = []
 
-    bbox_width = x2 - x1
-    bbox_height = y2 - y1
+    bbox_width = max(0, x2 - x1)
+    bbox_height = max(0, y2 - y1)
     bbox_area = bbox_width * bbox_height
-    image_area = image_width * image_height
-    area_ratio = bbox_area / image_area if image_area > 0 else 0
 
-    if confidence < 0.5:
+    image_area = image_width * image_height
+    bbox_area_ratio = bbox_area / image_area if image_area > 0 else 0
+
+    if confidence < LOW_CONFIDENCE_THRES:
         notes.append("low_confidence")
 
-    if area_ratio < 0.01:
+    if bbox_area_ratio < VERY_SMALL_OBJECT_AREA_RATIO_THRES:
+        notes.append("very_small_object")
+    elif bbox_area_ratio < SMALL_OBJECT_AREA_RATIO_THRES:
         notes.append("small_object")
 
-    border_margin = 5
     if (
-        x1 <= border_margin
-        or y1 <= border_margin
-        or x2 >= image_width - border_margin
-        or y2 >= image_height - border_margin
+        x1 <= BORDER_MARGIN_PX
+        or y1 <= BORDER_MARGIN_PX
+        or x2 >= image_width - BORDER_MARGIN_PX
+        or y2 >= image_height - BORDER_MARGIN_PX
     ):
         notes.append("near_image_border")
 
     if not notes:
         notes.append("normal")
 
-    return ";".join(notes), round(area_ratio, 6)
+    return ";".join(notes), round(bbox_area_ratio, 6)
 
 
 def save_class_summary_chart(class_counts):
@@ -231,47 +270,160 @@ def save_class_summary_chart(class_counts):
     Save a bar chart of class-level detection counts.
     """
     if not class_counts:
-        print("No class counts available. Skipping chart generation.")
+        print("No class counts available. Skipping class summary chart.")
         return
 
     class_names = list(class_counts.keys())
     counts = list(class_counts.values())
 
     plt.figure(figsize=(10, 5))
-    plt.bar(class_names, counts)
+    bars = plt.bar(class_names, counts)
+
     plt.xlabel("Class")
     plt.ylabel("Detection Count")
     plt.title("KITTI Traffic Scene Detection Summary")
     plt.xticks(rotation=30, ha="right")
+
+    for bar, count in zip(bars, counts):
+        plt.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            str(count),
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
     plt.tight_layout()
     plt.savefig(CLASS_CHART_PATH, dpi=200)
     plt.close()
 
 
-def main():
-    ANNOTATED_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-    CSV_DIR.mkdir(parents=True, exist_ok=True)
-    CHART_DIR.mkdir(parents=True, exist_ok=True)
+def run_threshold_comparison(model, image_paths, names):
+    """
+    Run YOLOv8 inference with different confidence thresholds and compare
+    the total number of traffic-related detections.
 
-    image_paths = collect_images(IMAGE_DIR)
+    This is used to analyze the trade-off between detection quantity and
+    possible false-positive risk.
+    """
+    threshold_results = []
 
-    if not image_paths:
-        raise FileNotFoundError(
-            f"No images found in:\n{IMAGE_DIR}\n\n"
-            f"Please put KITTI traffic-scene images into this folder."
+    for conf_thres in CONFIDENCE_THRESHOLDS:
+        class_counts = Counter()
+        total_detections = 0
+
+        print(f"\nRunning threshold comparison: conf={conf_thres}")
+
+        for image_index, image_path in enumerate(image_paths, start=1):
+            image = cv2.imread(str(image_path))
+
+            if image is None:
+                print(f"Warning: failed to read image: {image_path}")
+                continue
+
+            results = model(
+                image,
+                conf=conf_thres,
+                imgsz=IMG_SIZE,
+                verbose=False,
+            )
+
+            result = results[0]
+
+            if result.boxes is None:
+                continue
+
+            for box in result.boxes:
+                class_id = int(box.cls[0])
+                class_name = names[class_id]
+
+                if class_name not in TRAFFIC_CLASSES:
+                    continue
+
+                class_counts[class_name] += 1
+                total_detections += 1
+
+        row = {
+            "confidence_threshold": conf_thres,
+            "total_detections": total_detections,
+        }
+
+        for class_name in TRAFFIC_CLASS_ORDER:
+            row[class_name] = class_counts.get(class_name, 0)
+
+        threshold_results.append(row)
+
+        print(
+            f"conf={conf_thres} | "
+            f"total detections={total_detections} | "
+            f"class counts={dict(class_counts)}"
         )
 
-    print(f"Found {len(image_paths)} images.")
-    print("Loading YOLOv8 model...")
+    return threshold_results
 
-    model = YOLO(MODEL_NAME)
-    names = model.names
 
+def save_threshold_comparison_csv(threshold_results):
+    """
+    Save threshold comparison results to CSV.
+    """
+    fieldnames = ["confidence_threshold", "total_detections"] + TRAFFIC_CLASS_ORDER
+
+    with open(THRESHOLD_COMPARISON_CSV_PATH, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for row in threshold_results:
+            writer.writerow(row)
+
+
+def save_threshold_comparison_chart(threshold_results):
+    """
+    Save a chart showing how total detection count changes under different
+    confidence thresholds.
+    """
+    if not threshold_results:
+        print("No threshold comparison results available. Skipping chart.")
+        return
+
+    thresholds = [str(row["confidence_threshold"]) for row in threshold_results]
+    total_counts = [row["total_detections"] for row in threshold_results]
+
+    plt.figure(figsize=(8, 5))
+    bars = plt.bar(thresholds, total_counts)
+
+    plt.xlabel("Confidence Threshold")
+    plt.ylabel("Total Traffic-related Detections")
+    plt.title("Detection Count under Different Confidence Thresholds")
+
+    for bar, count in zip(bars, total_counts):
+        plt.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            str(count),
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
+
+    plt.tight_layout()
+    plt.savefig(THRESHOLD_CHART_PATH, dpi=200)
+    plt.close()
+
+
+def run_main_detection_analysis(model, image_paths, names):
+    """
+    Run the main YOLOv8 detection analysis using CONF_THRES.
+    Generate annotated images, detection CSV, summary CSVs, and failure-case CSV.
+    """
     total_class_counts = Counter()
     per_image_counts = {}
 
-    with open(DETECTION_CSV_PATH, "w", newline="", encoding="utf-8") as det_file:
+    with open(DETECTION_CSV_PATH, "w", newline="", encoding="utf-8") as det_file, \
+            open(FAILURE_CASE_CSV_PATH, "w", newline="", encoding="utf-8") as failure_file:
+
         det_writer = csv.writer(det_file)
+        failure_writer = csv.writer(failure_file)
 
         det_writer.writerow(
             [
@@ -286,6 +438,23 @@ def main():
                 "center_y",
                 "bbox_area_ratio",
                 "analysis_notes",
+            ]
+        )
+
+        failure_writer.writerow(
+            [
+                "image_name",
+                "class_name",
+                "confidence",
+                "x1",
+                "y1",
+                "x2",
+                "y2",
+                "center_x",
+                "center_y",
+                "bbox_area_ratio",
+                "analysis_notes",
+                "failure_reason",
             ]
         )
 
@@ -366,6 +535,25 @@ def main():
                         ]
                     )
 
+                    if analysis_notes != "normal":
+                        failure_reason = build_failure_reason(analysis_notes)
+                        failure_writer.writerow(
+                            [
+                                image_path.name,
+                                class_name,
+                                round(confidence, 4),
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                                center_x,
+                                center_y,
+                                bbox_area_ratio,
+                                analysis_notes,
+                                failure_reason,
+                            ]
+                        )
+
             draw_summary_panel(image, image_path.name, image_counts)
 
             output_image_path = ANNOTATED_IMAGE_DIR / image_path.name
@@ -378,33 +566,124 @@ def main():
                 f"{image_path.name} | {dict(image_counts)}"
             )
 
-    with open(IMAGE_SUMMARY_CSV_PATH, "w", newline="", encoding="utf-8") as image_summary_file:
-        image_summary_writer = csv.writer(image_summary_file)
-        image_summary_writer.writerow(["image_name", "class_name", "count"])
+    save_image_summary_csv(per_image_counts)
+    save_class_summary_csv(total_class_counts)
+    save_class_summary_chart(total_class_counts)
+
+    return total_class_counts
+
+
+def build_failure_reason(analysis_notes):
+    """
+    Convert heuristic tags into readable explanation.
+    """
+    reasons = []
+
+    if "low_confidence" in analysis_notes:
+        reasons.append("low detection confidence; possible false positive or uncertain object")
+
+    if "very_small_object" in analysis_notes:
+        reasons.append("very small bounding box; likely distant or hard-to-detect object")
+    elif "small_object" in analysis_notes:
+        reasons.append("small bounding box; detection may be less reliable")
+
+    if "near_image_border" in analysis_notes:
+        reasons.append("object near image border; object may be partially visible")
+
+    return " | ".join(reasons)
+
+
+def save_image_summary_csv(per_image_counts):
+    """
+    Save per-image object counts to CSV.
+    """
+    with open(IMAGE_SUMMARY_CSV_PATH, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["image_name", "class_name", "count"])
 
         for image_name, counts in per_image_counts.items():
             if not counts:
-                image_summary_writer.writerow([image_name, "none", 0])
+                writer.writerow([image_name, "none", 0])
             else:
                 for class_name, count in counts.items():
-                    image_summary_writer.writerow([image_name, class_name, count])
+                    writer.writerow([image_name, class_name, count])
 
-    with open(CLASS_SUMMARY_CSV_PATH, "w", newline="", encoding="utf-8") as class_summary_file:
-        class_summary_writer = csv.writer(class_summary_file)
-        class_summary_writer.writerow(["class_name", "total_count"])
+
+def save_class_summary_csv(total_class_counts):
+    """
+    Save total class counts to CSV.
+    """
+    with open(CLASS_SUMMARY_CSV_PATH, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["class_name", "total_count"])
 
         for class_name, count in total_class_counts.most_common():
-            class_summary_writer.writerow([class_name, count])
+            writer.writerow([class_name, count])
 
-    save_class_summary_chart(total_class_counts)
 
-    print("\nKITTI object detection analysis finished.")
+def print_final_summary(total_class_counts, threshold_results):
+    """
+    Print final project summary.
+    """
+    print("\n" + "=" * 80)
+    print("KITTI YOLOv8 object detection analysis finished.")
+    print("=" * 80)
+
+    print(f"Input image folder: {IMAGE_DIR}")
     print(f"Annotated images: {ANNOTATED_IMAGE_DIR}")
     print(f"Detection CSV: {DETECTION_CSV_PATH}")
     print(f"Image summary CSV: {IMAGE_SUMMARY_CSV_PATH}")
     print(f"Class summary CSV: {CLASS_SUMMARY_CSV_PATH}")
+    print(f"Failure-case candidates CSV: {FAILURE_CASE_CSV_PATH}")
+    print(f"Threshold comparison CSV: {THRESHOLD_COMPARISON_CSV_PATH}")
     print(f"Class summary chart: {CLASS_CHART_PATH}")
-    print(f"Total class counts: {dict(total_class_counts)}")
+    print(f"Threshold comparison chart: {THRESHOLD_CHART_PATH}")
+
+    print("\nMain detection class counts:")
+    print(dict(total_class_counts))
+
+    print("\nThreshold comparison:")
+    for row in threshold_results:
+        print(
+            f"conf={row['confidence_threshold']} | "
+            f"total_detections={row['total_detections']}"
+        )
+
+    print("\nNotes:")
+    print("- Failure-case candidates are heuristic indicators, not official KITTI benchmark errors.")
+    print("- Low-confidence, small-object, and near-border detections should be checked manually.")
+    print("- Official KITTI evaluation would require ground-truth labels and AP/mAP calculation.")
+
+
+def main():
+    ANNOTATED_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    CSV_DIR.mkdir(parents=True, exist_ok=True)
+    CHART_DIR.mkdir(parents=True, exist_ok=True)
+
+    image_paths = collect_images(IMAGE_DIR)
+
+    if not image_paths:
+        raise FileNotFoundError(
+            f"No images found in:\n{IMAGE_DIR}\n\n"
+            f"Please put KITTI traffic-scene images into this folder."
+        )
+
+    print(f"Found {len(image_paths)} images.")
+    print("Loading YOLOv8 model...")
+
+    model = YOLO(MODEL_NAME)
+    names = model.names
+
+    print("\nRunning main detection analysis...")
+    total_class_counts = run_main_detection_analysis(model, image_paths, names)
+
+    print("\nRunning confidence threshold comparison...")
+    threshold_results = run_threshold_comparison(model, image_paths, names)
+
+    save_threshold_comparison_csv(threshold_results)
+    save_threshold_comparison_chart(threshold_results)
+
+    print_final_summary(total_class_counts, threshold_results)
 
 
 if __name__ == "__main__":

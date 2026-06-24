@@ -124,11 +124,25 @@ This example shows YOLOv8 detection results on a KITTI traffic scene. The model 
 
 The class-level summary shows that cars are the dominant detected class in the selected KITTI image subset, which is consistent with typical road-scene data.
 
+### Confidence Threshold Comparison
+
+![Threshold Comparison](docs/threshold_comparison.png)
+
+The confidence-threshold comparison shows how the total number of traffic-related detections changes under different confidence thresholds.
+
 ### Failure Case Example
 
 ![KITTI Failure Case](docs/kitti_failure_case.png)
 
 This example shows potential limitations of YOLOv8n in complex traffic scenes, such as low-confidence detections, small objects, and possible false detections around traffic infrastructure or distant objects.
+
+## Analysis Observations
+
+In the selected KITTI image subset, cars are the dominant detected class, which is consistent with typical road-scene data. The confidence-threshold comparison shows that the number of detections decreases as the threshold increases. For example, the model produced 81 traffic-related detections at confidence 0.25, 41 detections at confidence 0.50, and 28 detections at confidence 0.70.
+
+This indicates a trade-off between detection coverage and false-positive risk. A lower confidence threshold can detect more small or distant objects, but may also introduce more uncertain detections. A higher threshold produces more conservative results, but may miss small vehicles, distant traffic lights, or partially visible objects.
+
+The failure-case candidate table uses heuristic indicators such as low confidence, small bounding-box area, and near-border object location. These candidates are not official KITTI benchmark errors, but they help identify examples that may require manual inspection.
 
 ## Limitations
 
